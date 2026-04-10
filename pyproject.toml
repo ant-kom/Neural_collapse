@@ -6,8 +6,19 @@ readme = "README.md"
 authors = [
     { name = "Komarov Anton", email = "a.komarov@ispras.ru" }
 ]
-requires-python = ">=3.10"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "awscli>=1.44.75",
+    "boto3>=1.42.85",
+    "matplotlib>=3.10.8",
+    "numpy==1.26.4",
+    "pip>=26.0.1",
+    "pylibjpeg>=2.0",
+    "pylibjpeg-libjpeg>=2.1",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "tqdm>=4.67.3",
+]
 
 [project.scripts]
 neural-collapse = "neural_collapse:main"
