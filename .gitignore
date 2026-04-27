@@ -61,3 +61,7 @@ data__DatasetsTest_tmp/
 docs/_build/
 
 
+plots/
+linear_coeff2_plots/
+linear_plots/
+plot_without_linear/

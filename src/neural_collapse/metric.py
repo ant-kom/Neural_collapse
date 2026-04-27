@@ -3,36 +3,73 @@ from torch import nn
 from torch.utils.data import DataLoader
 from .utils import print_step_info
 from dataclasses import dataclass
-import math
 from tqdm import tqdm
+import gc
 
 
 @dataclass
 class Statistics:
-    RMSK: torch.Tensor
     num_classes: int
     n_features: int
     metric: int | None = None
 
-def calculate_stat(model: nn.Module, num_classes: int, layer_name: str, dataloader: DataLoader, device: str, verbose: bool = False) -> Statistics:
-    #print(f"Allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB") 
-    #print(f"Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+class CalculateStat:
+    def __init__(self, num_features: int, num_classes: int, device: str):
+        self.num_classes = num_classes
+        self.Z = torch.zeros((num_features, num_classes), device=device)
+        self.Var = torch.zeros((num_features, num_features), device=device)
+        self.class_counts = torch.zeros(num_classes, device=device)
+
+    def update_stat(self, x: torch.Tensor, y: torch.Tensor):
+        x = x.view(x.size(0), -1) 
+        for k in range(self.num_classes):
+            mask = (y == k)
+            if mask.any():
+                selected: torch.Tensor = x[mask]
+                self.Z[:, k] += selected.sum(dim=0)
+                self.class_counts[k] += selected.size(0)
+                del selected
+
+        self.Var.addmm_(
+            x.T,
+            x,
+        )
+        del x
+
+    def collect_stat(self):
+        self.Var /= self.class_counts.sum().item()
+        self.Z /= self.class_counts
+        ex = (self.Z * self.class_counts).sum(dim=1, keepdim=True) / self.class_counts.sum()
+        self.Var.addmm_(
+            ex,
+            ex.T,
+            alpha=-1.0,
+        )
+        del ex
+
+def calculate_stat(
+    model: nn.Module, 
+    num_classes: int, 
+    layer_name: str, 
+    dataloader: DataLoader, 
+    device: str, 
+    verbose: bool = False, 
+    add_linear: bool = False,
+    add_affine: bool = False,
+    affine_shape_coeff: int = 2,
+) -> Statistics:
+
+    # Find number of features
+    features = []
+    def hook(module, input, output):
+        features.append(output.detach())
+
+    layer: nn.Module = dict([*model.named_modules()])[layer_name]
+    handle = layer.register_forward_hook(hook)
     with torch.no_grad():
-        # Hook for features
-        features = []
+        num_features = None
 
-        def hook(module, input, output):
-            features.append(output.detach())
-
-        layer: nn.Module = dict([*model.named_modules()])[layer_name]
-        handle = layer.register_forward_hook(hook)
-
-        class_counts = torch.zeros(num_classes, device=device)
-        class_norm = torch.zeros(num_classes, device=device)
-
-        n_features = None
-
-        for idx, batch in enumerate(dataloader):
+        for _, batch in enumerate(dataloader):
             x, y = batch
             x = x.to(device)
             y = y.to(device)
@@ -40,78 +77,104 @@ def calculate_stat(model: nn.Module, num_classes: int, layer_name: str, dataload
             features.clear()
             _ = model(x)
             feat = features[0]
+            feat = feat.view(feat.size(0), -1) 
+            num_features = feat.shape[1]
+            break
+    handle.remove()
 
-            if verbose and idx == 0:
-                print(f"Feature shape before = {feat.shape}")
+    # Make linear module
+    if add_linear:
+        linear_class = nn.Linear(num_features, num_classes).to(device)
+        linear_class.train()
+        linear_class.requires_grad_(True)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(linear_class.parameters(), lr=1e-2)
+        total_loss = 0.0
+        handle = layer.register_forward_hook(hook)
+        for _, batch in enumerate(dataloader):
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
 
-            feat = feat.view(feat.size(0), -1)  # [B, n]
-            B, n = feat.shape
+            with torch.no_grad():
+                features.clear()
+                _ = model(x)
+                feat = features[0]
+                feat = feat.view(feat.size(0), -1)
 
-            if verbose and idx == 0:
-                print(f"Feature shape after reshape = {feat.shape}")
+            with torch.enable_grad():
+                feat = feat.detach().requires_grad_(True)
+                logits = linear_class(feat)
+                loss = criterion(logits, y)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            if n_features is None:
-                n_features = n
-                print(f"Num features: {n_features}")
-                Z = torch.zeros((n_features, num_classes), device=device)
-                Var = torch.zeros((n_features, n_features), device=device)
-
-            for k in range(num_classes):
-                mask = (y == k)
-                if mask.any():
-                    selected: torch.Tensor = feat[mask]
-                    Z[:, k] += selected.sum(dim=0)
-                    class_norm[k] += selected.norm() ** 2
-                    class_counts[k] += selected.size(0)
-                    del selected
-
-            Var.addmm_(
-                feat.T,
-                feat,
-            )
-
-            del feat
-
-
+            total_loss += loss.item()
         handle.remove()
-        if verbose:
-            print(f"Class counts = {class_counts}")
+        num_features = num_classes
 
-        Var /= class_counts.sum().item()
-        ex = Z.sum(dim=1, keepdim=True) / class_counts.sum().item()
-        Var.addmm_(
-            ex,
-            ex.T,
-            alpha=-1.0,
-        )
-        del ex
-        if verbose:
-            print(f"Var shape = {Var.shape}")
+    # Calculate mean and std
+    if add_affine:
+        num_features = int(num_features * affine_shape_coeff)
+        Matrix_A = torch.randn((num_features, num_classes), device=device)
+        Vector_b = torch.randn((num_features,), device=device)
+    st = CalculateStat(num_features, num_classes, device)
+    handle = layer.register_forward_hook(hook)
+    with torch.no_grad():
+        for _, batch in enumerate(dataloader):
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
 
-        Z /= class_counts
-        if verbose:
-            print(f"Z shape = {Z.shape}")
+            features.clear()
+            _ = model(x)
+            feat = features[0]
+            feat = feat.view(feat.size(0), -1)
 
-        RMSK = torch.zeros((num_classes), device=device)
-        for k in range(num_classes):
-            RMSK[k] = torch.sqrt((class_norm[k] / class_counts[k] - torch.norm(Z[:, k]) ** 2) / n_features)
+            if add_linear:
+                logits = linear_class(feat)
+            else:
+                logits = feat
 
-        return Statistics(
-            RMSK=RMSK.to("cpu"), 
-            num_classes=num_classes,
-            n_features=n_features,
-        ), Z, Var
+            if add_affine:
+                logits = (Matrix_A @ logits.T + Vector_b.reshape(-1, 1)).T
 
-def calculate_a0(Z: torch.Tensor, n_features: int, num_classes: int, device: str, verbose: bool = False):
+            st.update_stat(logits, y)
+    handle.remove()
+
+    st.collect_stat()
+
+    if verbose:
+        print(f"Var shape = {st.Var.shape}")
+        print(f"Z shape = {st.Z.shape}")
+
+    return Statistics(
+        num_classes=num_classes,
+        n_features=num_features,
+    ), st.Z, st.Var
+
+def calculate_a0(Z: torch.Tensor, n_features: int, num_classes: int, device: str, verbose: bool = False, eps: float = 1e-4):
+    if n_features > 20000:
+        return None, 1
     A0 = torch.zeros((n_features, n_features), device=device)
-    ZtZ = Z.T @ Z  # K x K
-    A0[:num_classes, :] = torch.linalg.solve(ZtZ, Z.T)
-    A0 -= Z @ A0[:num_classes, :]
-    A0.diagonal().add_(1.0)
+    U, S, Vh = torch.linalg.svd(Z, full_matrices=False)
+    p = sum(S > eps)
+    if p < num_classes:
+        return None, p
+
+    Zinv_Z = Vh.T @ torch.diag(1.0 / S) @ U.T
+    A0[:num_classes, :] = Zinv_Z
+    B = Z @ A0[:num_classes, :]
+    A0 -= B
+    A0 += torch.eye(n_features, device=device)
     if verbose:
         print(f"A0 shape = {A0.shape}")
+        check_matr = torch.zeros((n_features, Z.shape[1]), device=device)
+        check_matr[:Z.shape[1], :] = torch.eye(Z.shape[1])
+        print(f"CHECKING A0 = ", torch.norm(A0 @ Z - check_matr), torch.norm(A0), torch.norm(A0 @ Z - check_matr) / torch.norm(A0))
 
-    return A0
+    return A0, p
 
 def calculate_s(A0: torch.Tensor, Var: torch.Tensor, num_classes: int, verbose: bool = False):
     Var = A0 @ Var
@@ -129,10 +192,9 @@ def calculate_s(A0: torch.Tensor, Var: torch.Tensor, num_classes: int, verbose: 
         print(f"Sigma_21 shape = {Sigma_21.shape}")
         print(f"Sigma_22 shape = {Sigma_22.shape}")
         print(torch.norm(Sigma_12 - Sigma_21.T) / torch.norm(Sigma_12))
-        print(Sigma_22.numel(), (Sigma_22 > 1e-8).sum().item())
-        print(Sigma_11.numel(), (Sigma_11 > 1e-8).sum().item())
-        print(Sigma_12.numel(), (Sigma_12 > 1e-8).sum().item())
-        print(sum(torch.svd(Sigma_22, compute_uv=False).S > 1e-2))
+        print(sum(torch.svd(Sigma_11, compute_uv=False).S > 1e-6))
+        print(sum(torch.svd(Sigma_21, compute_uv=False).S > 1e-6))
+        print(sum(torch.svd(Sigma_22, compute_uv=False).S > 1e-6))
 
 
     S = Sigma_11
@@ -145,26 +207,35 @@ def calculate_s(A0: torch.Tensor, Var: torch.Tensor, num_classes: int, verbose: 
     return S
 
 def calculate_final_metr(S: torch.Tensor, num_classes: int, device: str, verbose: bool = False):
-    ones = torch.ones((num_classes, 1), device=device)
+    ones_K = torch.ones((num_classes, 1), device=device)
 
     trace_S = torch.trace(S)
-    quad = (ones.T @ S @ ones) / num_classes
+    quad =  torch.norm(S @ ones_K)**2 / (ones_K.T @ S @ ones_K)
     metric = trace_S - quad.squeeze()
+    coeff = (num_classes - 1)/num_classes
 
     if verbose:
         print(f"Final metric = {metric.item()}")
-    return metric.item()
+    return metric.item() - coeff
 
 @print_step_info("FINAL RESULTS")
 def print_final_res(statistics: Statistics, calc_final: bool = True) -> None:
-    print(f"RMSK = {statistics.RMSK}")
     if calc_final:
         print(f"metric = {statistics.metric}")
     print(f"num_classes = {statistics.num_classes}")
     print(f"n_features = {statistics.n_features}")
 
 @print_step_info("CALCULATE METRIC")
-def compute_metric(model: nn.Module, num_classes: int, layer_name: str, dataloader: DataLoader, calc_final: bool = True, verbose: bool = False) -> Statistics:
+def compute_metric(
+    model: nn.Module, 
+    num_classes: int, 
+    layer_name: str, 
+    dataloader: DataLoader, 
+    calc_final: bool = True, 
+    verbose: bool = False, 
+    add_linear: bool = False, 
+    add_affine: bool = False,
+) -> Statistics:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
     model.eval()
@@ -177,16 +248,25 @@ def compute_metric(model: nn.Module, num_classes: int, layer_name: str, dataload
             dataloader=dataloader,
             device=device,
             verbose=verbose,
+            add_linear=add_linear,
+            add_affine=add_affine,
         )
 
         if calc_final:
-            A0 = calculate_a0(
+            A0, p = calculate_a0(
                 Z=Z,
                 n_features=statistics.n_features,
                 num_classes=statistics.num_classes,
                 device=device,
                 verbose=verbose,
             )
+
+            if p < statistics.num_classes:
+                statistics.metric = torch.nan
+                del Z, Var
+                if verbose:
+                    print_final_res(statistics=statistics, calc_final=calc_final)
+                return statistics
 
             S = calculate_s(
                 A0=A0,
@@ -208,3 +288,32 @@ def compute_metric(model: nn.Module, num_classes: int, layer_name: str, dataload
             print_final_res(statistics=statistics, calc_final=calc_final)
 
     return statistics
+
+def compute_layers_metrics(
+    layers_names: str, 
+    model: nn.Module, 
+    num_classes: int, 
+    dataloader: DataLoader, 
+    verbose: bool, 
+    add_linear: bool = False, 
+    add_affine: bool = False,
+) -> torch.Tensor:
+    values = torch.zeros((1, len(layers_names)))
+    for idx, layer in enumerate(tqdm(layers_names)):
+        res = compute_metric(
+            model=model, 
+            num_classes=num_classes,
+            layer_name=layer, 
+            dataloader=dataloader, 
+            calc_final=True, 
+            verbose=verbose,
+            add_linear=add_linear, 
+            add_affine=add_affine,
+        ) 
+        torch.cuda.empty_cache() 
+        gc.collect() 
+        values[:, idx] = res.metric
+        print(res.metric)
+        del res
+
+    return values

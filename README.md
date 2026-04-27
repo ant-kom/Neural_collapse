@@ -1,130 +1,175 @@
-# Алгоритм вычисления метрики
+# Neural Collapse Experiments — README
 
-## Входные данные
-- Модель классификации `model` (выход: `(batch_size, K)`)
-- Название слоя `layer_name`
-- Даталоадер `dataloader`
+## 1. Overview
 
----
-
-## Обозначения
-- $n$ — размерность признаков  
-- $K$ — число классов  
-- $X \in \mathbb{R}^n$ — вектор признаков  
-- $Z \in \mathbb{R}^{n \times K}$ — матрица условных ожиданий  
-- $Var(X) \in \mathbb{R}^{n \times n}$ — ковариация  
+This project is designed for experiments on **neural collapse** in convolutional neural networks (e.g., ResNet-18) on standard datasets (e.g., CIFAR-10).
 
 ---
 
-## Шаг 0. Определение числа классов
+## 2. Installation and Build (uv)
 
-Пропустить один батч через модель:
+The project uses the **uv** package manager.
 
-$$
-K = \text{output.shape}[1]
-$$
+Install dependencies:
 
----
+```bash
+uv sync
+```
 
-## Шаг 1. Оценка матрицы $Z$
+## 3. Basic Usage Example
 
-Для каждого класса $k$:
-
-$$
-Z[:, k] = \mathbb{E}[X \mid Y = k]
-$$
-
-Итог:
-
-$$
-Z =
-\begin{bmatrix}
-\mu_0 & \mu_1 & \dots & \mu_{K-1}
-\end{bmatrix}
-\in \mathbb{R}^{n \times K}
-$$
+```bash
+neural-collapse resnet18 cifar10 --weights cifar10_resnet18.pth --verbose
+```
 
 ---
 
-## Шаг 2. Матрица $A_0$
+## 4. Required Arguments
 
-Проектор:
+| Argument     | Description        | Example  |
+| ------------ | ------------------ | -------- |
+| model_name   | Model architecture | resnet18 |
+| dataset_name | Dataset name       | cifar10  |
 
-$$
-P = Z (Z^T Z)^{-1} Z^T
-$$
-
-Блочная матрица:
-
-$$
-B =
-\begin{bmatrix}
-(Z^T Z)^{-1} Z^T \\
-0
-\end{bmatrix}
-$$
-
-Итог:
-
-$$
-A_0 = B + I - P
-$$
+All avaliable lists of models and datasets you can find in model.py and dataloader.py.
 
 ---
 
-## Шаг 3. Ковариация
+## 5. CLI Options
 
-$$
-Var(X) = \mathbb{E}[(X - \mathbb{E}X)(X - \mathbb{E}X)^T]
-$$
+### 5.1 weights
 
-$$
-\Sigma = A_0 \cdot Var(X) \cdot A_0^T
-$$
+Load pretrained model weights.
 
----
+```bash
+--weights cifar10_resnet34.pth
+```
 
-## Шаг 4. Блочное разбиение
-
-$$
-\Sigma =
-\begin{bmatrix}
-\Sigma_{11} & \Sigma_{12} \\
-\Sigma_{21} & \Sigma_{22}
-\end{bmatrix}
-$$
-
-Размерности:
-- $\Sigma_{11} \in \mathbb{R}^{K \times K}$
-- $\Sigma_{12} \in \mathbb{R}^{K \times (n-K)}$
-- $\Sigma_{21} \in \mathbb{R}^{(n-K) \times K}$
-- $\Sigma_{22} \in \mathbb{R}^{(n-K) \times (n-K)}$
+Path is interpreted as a relative path to the `artifacts/` directory.
 
 ---
 
-## Шаг 5. Матрица $S$
+### 5.2 batch_size
 
-$$
-S = \Sigma_{11} - \Sigma_{12} \Sigma_{22}^{-1} \Sigma_{21}
-$$
+Batch size for dataloaders.
 
----
+```bash
+--batch_size 16
+```
 
-## Шаг 6. Метрика
-
-$$
-\mathbf{1} = (1, \dots, 1)^T
-$$
-
-$$
-\text{Metric} =
-\operatorname{tr}(S) - \frac{1}{K} \mathbf{1}^T S \mathbf{1}
-$$
+Default: `16`
 
 ---
 
-## Выход
-Скалярное значение метрики
+### 5.3 start_layer
+
+Layer index from which analysis starts.
+
+```bash
+--start_layer 0
+```
+
+Default: `0`
 
 ---
 
+### 5.4 train
+
+Enable training mode.
+
+```bash
+--train path/to/save_weights.pth
+```
+
+If provided, the model is trained and weights are saved to the given path.
+
+---
+
+### 5.5 verbose
+
+Enable detailed logging.
+
+```bash
+--verbose
+```
+
+Default: `False`
+
+---
+
+### 5.6 linear
+
+Adds a linear classifier after each layer.
+
+```bash
+--linear
+```
+
+Used for analysis of linear separability of representations.
+
+---
+
+### 5.7 affine
+
+Tests invariance to linear transformations.
+
+```bash
+--affine
+```
+
+Used to evaluate stability of representations under linear mappings.
+
+---
+
+## 6. Usage Examples
+
+### 6.1 Basic inference with pretrained weights
+
+```bash
+neural-collapse resnet34 cifar10 --weights cifar10_resnet34.pth
+```
+
+### 6.2 Verbose mode
+
+```bash
+neural-collapse resnet34 cifar10 --weights cifar10_resnet34.pth --verbose
+```
+
+### 6.3 Linear probes per layer
+
+```bash
+neural-collapse resnet34 cifar10 --weights cifar10_resnet34.pth --linear
+```
+
+### 6.4 Affine invariance test
+
+```bash
+neural-collapse resnet34 cifar10 --weights cifar10_resnet34.pth --affine
+```
+
+### 6.5 Training mode
+
+```bash
+neural-collapse resnet34 cifar10 --train ./checkpoints/resnet34.pth
+```
+
+---
+
+## 7. CLI Behavior Summary
+
+* `--weights` → inference with pretrained model
+* `--train` → training mode
+* `--linear` → linear separability analysis
+* `--affine` → invariance analysis under linear transformations
+* `--verbose` → detailed logs
+
+---
+
+## 8. Notes
+
+* `linear` and `affine` can be used together.
+* If neither `--weights` nor `--train` is provided, behavior depends on implementation.
+* `start_layer` affects only analysis depth, not architecture.
+* All generated plots are saved to the `plots/` directory.
+
+```

@@ -20,6 +20,7 @@ class Trainer:
         lr: float = 0.001,
         momentum: float = 0.9,
         num_epochs: int = 1,
+        jacobian_add: bool = False,
         save_model_weigths: str = "artifacts/weights.pth",
         verbose: bool = False,
     ) -> None:
@@ -46,11 +47,29 @@ class Trainer:
             for batch in tqdm(self.train_dataloader, desc="Train", disable=not verbose):
                 inputs, labels = batch
                 inputs, labels = inputs.to(device), labels.to(device)
+                inputs.requires_grad_(True)
 
                 optimizer.zero_grad()
 
                 outputs = self.model(inputs)
                 loss: nn.Module = criterion(outputs, labels)
+
+                if jacobian_add:
+                    v = torch.randn_like(outputs)  
+
+                    Jv = torch.autograd.grad(
+                        outputs=outputs,
+                        inputs=inputs,
+                        grad_outputs=v,
+                        create_graph=True,
+                        retain_graph=True
+                    )[0]
+
+                    jacobian_reg = (Jv ** 2).sum(dim=[1,2,3]).mean()  
+
+                    lambda_reg = 1e-1  
+                    loss = loss + lambda_reg * jacobian_reg
+
                 loss.backward()
                 optimizer.step()
 
