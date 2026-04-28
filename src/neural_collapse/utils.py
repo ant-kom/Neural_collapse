@@ -113,3 +113,50 @@ def check_parameters():
             res[model_name] = features_n
             print(f"Model = {model_name},  feature_max = {max(features_n)}")
     return res
+
+def get_forward_trace(model, start_layer: int):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    x = torch.randn((1, 3, 32, 32)).to(device)
+    model.eval()
+
+    trace = []
+    hooks = []
+
+    global_call_id = 0
+    layer_call_counter = {}
+
+    def make_hook(name):
+        def hook(module, input, output):
+            nonlocal global_call_id
+
+            # локальный счётчик для слоя
+            layer_call_counter[name] = layer_call_counter.get(name, 0) + 1
+            local_call_id = layer_call_counter[name]
+
+            trace.append((
+                global_call_id,        # глобальный порядок
+                name,                  # имя слоя
+                module.__class__.__name__,  # тип модуля
+                local_call_id         # номер вызова этого слоя
+            ))
+
+            global_call_id += 1
+
+        return hook
+
+    # регистрируем hook на ВСЕ leaf-модули
+    for name, module in model.named_modules():
+        if len(list(module.children())) == 0:
+            hooks.append(module.register_forward_hook(make_hook(name)))
+
+    with torch.no_grad():
+        _ = model(x)
+
+    for h in hooks:
+        h.remove()
+
+    trace = trace[start_layer:]
+    layer_types = [t for _, _, t, _ in trace]
+    layer_meta = [(g, n, l) for g, n, _, l in trace]
+
+    return layer_meta, layer_types

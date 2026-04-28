@@ -1,5 +1,6 @@
 import argparse
 import neural_collapse
+from neural_collapse.utils import get_forward_trace
 
 
 def main():
@@ -53,6 +54,7 @@ def main():
 
     import torch
     torch.manual_seed(42)
+    torch.set_default_dtype(torch.float64)
 
     dataloader_train, dataloader_test, NUM_CLASSES, ONE_CHANNEL = neural_collapse.get_dataloaders(args.dataset_name, batch_size=args.batch_size)
     weights_path = ARTIFACT_FOLDER + args.weights if args.weights else args.weights
@@ -64,7 +66,9 @@ def main():
         trainer.train_function(num_epochs=5, save_model_weigths=ARTIFACT_FOLDER + args.train, verbose=args.verbose)
     trainer.eval_function(verbose=args.verbose)
 
-    layers_names, layers_types = neural_collapse.get_layers(trainer.model.model, args.start_layer)
+    layers_names, layers_types = get_forward_trace(trainer.model.model, args.start_layer)
+
+    print(layers_types)
 
     values = neural_collapse.compute_layers_metrics(layers_names, trainer.model.model, NUM_CLASSES, dataloader_test, args.verbose, args.linear, args.affine)
 
