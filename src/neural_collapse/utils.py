@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torchvision.models import *
 from .resnet import ResNet50
+import math
 
 
 def print_step_info(step_name: str):
@@ -133,11 +134,18 @@ def get_forward_trace(model, start_layer: int):
             layer_call_counter[name] = layer_call_counter.get(name, 0) + 1
             local_call_id = layer_call_counter[name]
 
+            in_tensor = input[0] if isinstance(input, (tuple, list)) else input
+            out_tensor = output[0] if isinstance(output, (tuple, list)) else output
+
+            input_features = math.prod(in_tensor.shape[1:])
+            output_features = math.prod(out_tensor.shape[1:])
+
             trace.append((
                 global_call_id,        # глобальный порядок
                 name,                  # имя слоя
                 module.__class__.__name__,  # тип модуля
-                local_call_id         # номер вызова этого слоя
+                local_call_id,         # номер вызова этого слоя
+                output_features >= input_features, # Число признаков увеличилось
             ))
 
             global_call_id += 1
@@ -156,7 +164,8 @@ def get_forward_trace(model, start_layer: int):
         h.remove()
 
     trace = trace[start_layer:]
-    layer_types = [t for _, _, t, _ in trace]
-    layer_meta = [(g, n, l) for g, n, _, l in trace]
+    layer_types = [t for _, _, t, _, _ in trace]
+    layer_meta = [(g, n, l) for g, n, _, l, _ in trace]
+    layer_fetures_change = [t for _, _, _, _, t in trace]
 
-    return layer_meta, layer_types
+    return layer_meta, layer_types, layer_fetures_change

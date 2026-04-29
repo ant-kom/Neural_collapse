@@ -54,11 +54,12 @@ def calculate_stat(
     add_affine: bool = False,
     affine_shape_coeff: int = 2,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    model.eval()
 
     # Find number of features
     features = []
     def hook(module, input, output):
-        features.append(output.detach())
+        features.append(output.detach().clone())
 
     target_name = layer_name[1]
     layer: nn.Module = dict([*model.named_modules()])[target_name]

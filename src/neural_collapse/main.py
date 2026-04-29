@@ -66,9 +66,9 @@ def main():
         trainer.train_function(num_epochs=5, save_model_weigths=ARTIFACT_FOLDER + args.train, verbose=args.verbose)
     trainer.eval_function(verbose=args.verbose)
 
-    layers_names, layers_types = get_forward_trace(trainer.model.model, args.start_layer)
+    layers_names, layers_types, layer_fetures_change = get_forward_trace(trainer.model.model, args.start_layer)
 
-    print(layers_types)
+    print(layers_names, layers_types)
 
     values = neural_collapse.compute_layers_metrics(layers_names, trainer.model.model, NUM_CLASSES, dataloader_test, args.verbose, args.linear, args.affine)
 
@@ -79,6 +79,7 @@ def main():
         values_name="Metric",
         save_path=f"plots/metric_{args.model_name}_{args.dataset_name}.pdf",
         start_layer=args.start_layer,
+        layer_fetures_change=layer_fetures_change,
     )
 
 
