@@ -9,7 +9,6 @@ results/
 datasets/
 .idea/
 __pycache__/
-*.pth
 
 *explainers_metrics*
 
@@ -48,6 +47,8 @@ venv_new
 
 
 .vscode
+
+image_examples/
 
 gnn
 torch_install

@@ -56,7 +56,7 @@ def main():
 
     args = parser.parse_args()
 
-    ARTIFACT_FOLDER = "artifacts/"
+    ARTIFACT_FOLDER = "models/"
 
     import torch
     torch.manual_seed(42)
