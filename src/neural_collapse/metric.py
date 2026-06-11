@@ -2,7 +2,6 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from .utils import print_step_info
-from dataclasses import dataclass
 from tqdm import tqdm
 import gc
 
@@ -53,7 +52,8 @@ def calculate_stat(
     add_linear: bool = False,
     add_affine: bool = False,
     affine_shape_coeff: int = 2,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    ood_dataloader: DataLoader | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
     model.eval()
 
     # Find number of features
@@ -144,11 +144,40 @@ def calculate_stat(
 
     st.collect_stat()
 
+    #Calculate ood metric
+    ood_metric = 0
+    num_ood_objects = 0
+    handle = layer.register_forward_hook(hook)
+    with torch.no_grad():
+        for _, batch in enumerate(ood_dataloader):
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
+
+            features.clear()
+            outputs = model(x)
+            feat = features[layer_name[2]-1]
+            feat = feat.view(feat.size(0), -1)
+
+            if add_linear:
+                logits = linear_class(feat)
+            else:
+                logits = feat
+
+            k = outputs.argmax(dim=1)
+            ood_metric += ((st.Z[:, k].T - logits)**2).sum(dim=1).sum()
+            num_ood_objects+= x.shape[0]
+        ood_metric = torch.sqrt(ood_metric).item() / num_ood_objects
+
+    handle.remove()
+
+
     if verbose:
         print(f"Var shape = {st.Var.shape}")
         print(f"Z shape = {st.Z.shape}")
+        print(f"ood_metric = {ood_metric}")
 
-    return st.Z, st.Var
+    return st.Z, st.Var, ood_metric
 
 @print_step_info("CALCULATE A0")
 def calculate_a0(Z: torch.Tensor, verbose: bool = False) -> torch.Tensor:
@@ -246,9 +275,10 @@ def calculate_final_metr(S: torch.Tensor, verbose: bool = False) -> float:
     return metric.item() - coeff
 
 @print_step_info("FINAL RESULTS")
-def print_final_res(Z: torch.Tensor, metric: float, verbose: bool = False) -> None:
+def print_final_res(Z: torch.Tensor, metric: float, ood_metric: float, verbose: bool = False) -> None:
     if verbose:
         print(f"metric = {metric}")
+        print(f"ood_metric = {ood_metric}")
         print(f"n_features = {Z.shape[0]}")
         print(f"num_classes = {Z.shape[1]}")
 
@@ -261,6 +291,7 @@ def compute_metric(
     verbose: bool = False, 
     add_linear: bool = False, 
     add_affine: bool = False,
+    ood_dataloader: DataLoader | None = None,
 ) -> float:
     if verbose:
         print(f"Layer type = {layer_name[1]}")
@@ -269,7 +300,7 @@ def compute_metric(
     model.eval()
 
     with torch.no_grad():
-        Z, Var = calculate_stat(
+        Z, Var, ood_metric = calculate_stat(
             model=model,
             num_classes=num_classes,
             layer_name=layer_name,
@@ -278,6 +309,7 @@ def compute_metric(
             verbose=verbose,
             add_linear=add_linear,
             add_affine=add_affine,
+            ood_dataloader=ood_dataloader,
         )
 
         A0 = calculate_a0(
@@ -299,7 +331,7 @@ def compute_metric(
                 verbose=verbose,
             )
 
-        print_final_res(Z=Z, metric=metric, verbose=verbose)
+        print_final_res(Z=Z, metric=metric, ood_metric=ood_metric, verbose=verbose)
         del Z, Var
         return metric
 
@@ -311,6 +343,7 @@ def compute_layers_metrics(
     verbose: bool, 
     add_linear: bool = False, 
     add_affine: bool = False,
+    ood_dataloader: DataLoader | None = None,
 ) -> torch.Tensor:
     values = torch.zeros((1, len(layers_names)))
     for idx, layer in enumerate(tqdm(layers_names)):
@@ -322,6 +355,7 @@ def compute_layers_metrics(
             verbose=verbose,
             add_linear=add_linear, 
             add_affine=add_affine,
+            ood_dataloader=ood_dataloader,
         ) 
         torch.cuda.empty_cache() 
         gc.collect() 

@@ -121,6 +121,22 @@ Used to evaluate stability of representations under linear mappings.
 
 ---
 
+### 5.8 dataset_ood
+
+Enable calculate ood metric.
+
+```bash
+--dataset_ood
+```
+
+Default: `None`
+
+Specifies an additional dataset used for OOD evaluation. Supported options: mnist, fashion_mnist, imagenette.
+
+When enabled, OOD samples are included in metric computation, and example images from the first batch of the OOD dataset are saved to the image_examples/ directory for inspection.
+
+---
+
 ## 6. Usage Examples
 
 ### 6.1 Basic inference with pretrained weights
@@ -152,6 +168,13 @@ neural-collapse resnet34 cifar10 --weights cifar10_resnet34.pth --affine
 ```bash
 neural-collapse resnet34 cifar10 --train ./checkpoints/resnet34.pth
 ```
+
+### 6.5 Use ood examples
+
+```bash
+neural-collapse resnet34 cifar10 --train ./checkpoints/resnet34.pth --dataset_ood imagenette
+```
+
 
 ---
 

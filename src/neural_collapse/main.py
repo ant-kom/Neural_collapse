@@ -1,12 +1,18 @@
 import argparse
 import neural_collapse
-from neural_collapse.utils import get_forward_trace
+from neural_collapse.utils import get_forward_trace, save_image_examples
 
 
 def main():
     parser = argparse.ArgumentParser(description="Experiments for neural collapse.")
     parser.add_argument("model_name", type=str, help="Model name.")
     parser.add_argument("dataset_name", type=str, help="Dataset name.")
+    parser.add_argument(
+        "--dataset_ood",
+        type=str,
+        default=None,
+        help="OOD danaset name.",
+    )
     parser.add_argument(
         "--batch_size",
         type=int,
@@ -56,10 +62,11 @@ def main():
     torch.manual_seed(42)
     torch.set_default_dtype(torch.float64)
 
-    dataloader_train, dataloader_test, NUM_CLASSES, ONE_CHANNEL = neural_collapse.get_dataloaders(args.dataset_name, batch_size=args.batch_size)
+    dataloader_train, dataloader_test, ood_dataloader_train, ood_dataloader_test, NUM_CLASSES, ONE_CHANNEL = neural_collapse.get_dataloaders(args.dataset_name, batch_size=args.batch_size, add_ood=args.dataset_ood)
     weights_path = ARTIFACT_FOLDER + args.weights if args.weights else args.weights
     model = neural_collapse.ModelWrapper(args.model_name, NUM_CLASSES, ONE_CHANNEL, weights_path)
 
+    save_image_examples(dataloader_test, ood_dataloader_test)
 
     trainer = neural_collapse.Trainer(model, dataloader_train, None, dataloader_test)
     if args.train:
@@ -70,7 +77,7 @@ def main():
 
     print(layers_names, layers_types)
 
-    values = neural_collapse.compute_layers_metrics(layers_names, trainer.model.model, NUM_CLASSES, dataloader_test, args.verbose, args.linear, args.affine)
+    values = neural_collapse.compute_layers_metrics(layers_names, trainer.model.model, NUM_CLASSES, dataloader_test, args.verbose, args.linear, args.affine, ood_dataloader_test)
 
     neural_collapse.make_plots(
         values=values.flatten().tolist(),

@@ -3,6 +3,10 @@ from torch import nn
 from torchvision.models import *
 from .resnet import ResNet50
 import math
+from torch.utils.data import DataLoader
+from pathlib import Path
+import torchvision
+import matplotlib.pyplot as plt
 
 
 def print_step_info(step_name: str):
@@ -169,3 +173,58 @@ def get_forward_trace(model, start_layer: int):
     layer_fetures_change = [t for _, _, _, _, t in trace]
 
     return layer_meta, layer_types, layer_fetures_change
+
+
+
+
+def _save_batch(images, labels, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for i in range(len(images)):
+        img = images[i]
+
+        plt.figure(figsize=(4, 4))
+
+        if img.shape[0] == 1:
+            plt.imshow(
+                img.squeeze(0).cpu(),
+                cmap="gray"
+            )
+        else:
+            plt.imshow(
+                img.permute(1, 2, 0)
+                   .cpu()
+                   .clamp(0, 1)
+            )
+
+        plt.title(f"label={int(labels[i])}")
+        plt.axis("off")
+
+        plt.savefig(
+            out_dir / f"{i:04d}.png",
+            bbox_inches="tight",
+            pad_inches=0,
+        )
+        plt.close()
+
+
+def save_image_examples(
+    dataloader,
+    ood_dataloader,
+    output_dir="image_examples",
+):
+    output_dir = Path(output_dir)
+
+    x, y = next(iter(dataloader))
+    _save_batch(
+        x,
+        y,
+        output_dir / "id"
+    )
+
+    x, y = next(iter(ood_dataloader))
+    _save_batch(
+        x,
+        y,
+        output_dir / "ood"
+    )
